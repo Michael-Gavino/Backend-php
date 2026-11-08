@@ -16,16 +16,17 @@ final class AddContactAndCoordinatesToPackages extends AbstractMigration
 ALTER TABLE paquetes
     ADD COLUMN destinatario_correo VARCHAR(150) NULL AFTER destinatario_celular,
     ADD COLUMN destino_lat DECIMAL(9,6) NULL AFTER referencia,
-    ADD COLUMN destino_lng DECIMAL(9,6) NULL AFTER destino_lat,
-    ADD CONSTRAINT ck_paquetes_coordenadas CHECK ((destino_lat IS NULL) = (destino_lng IS NULL))
+    ADD COLUMN destino_lng DECIMAL(9,6) NULL AFTER destino_lat
 SQL);
+        // TiDB no permite crear columnas y un CHECK sobre ellas en el mismo ALTER.
+        $this->execute('ALTER TABLE paquetes ADD CONSTRAINT ck_paquetes_coordenadas CHECK ((destino_lat IS NULL) = (destino_lng IS NULL))');
     }
 
     public function down(): void
     {
+        $this->execute('ALTER TABLE paquetes DROP CHECK ck_paquetes_coordenadas');
         $this->execute(<<<'SQL'
 ALTER TABLE paquetes
-    DROP CHECK ck_paquetes_coordenadas,
     DROP COLUMN destino_lng,
     DROP COLUMN destino_lat,
     DROP COLUMN destinatario_correo
