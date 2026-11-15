@@ -1,0 +1,31 @@
+name: Despertar PHP y Python
+
+on:
+  schedule:
+    # Cada 10 min de 10:00 a 03:59 hora de Lima (UTC-5) = 15:00-08:59 UTC
+    - cron: '*/10 0-8,15-23 * * *'
+  workflow_dispatch: # permite ejecutarlo a mano desde la pestana Actions
+
+jobs:
+  despertar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Llamar a /health hasta recibir {"status":"ok"}
+        run: |
+          for url in \
+            https://backend-php-d4ec.onrender.com/health \
+            https://microservicio-tarifas.onrender.com/health; do
+            ok=no
+            for intento in 1 2 3 4 5 6 7 8; do
+              body=$(curl -s --max-time 60 "$url" || true)
+              if echo "$body" | grep -q '"status"'; then
+                ok=si
+                echo "$url despierto (intento $intento)"
+                break
+              fi
+              echo "$url intento $intento: todavia no responde"
+              sleep 15
+            done
+            if [ "$ok" != si ]; then echo "::warning::$url no desperto"; fi
+          done
