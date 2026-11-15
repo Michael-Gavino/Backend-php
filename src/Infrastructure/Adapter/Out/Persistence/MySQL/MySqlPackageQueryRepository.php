@@ -9,6 +9,7 @@ use App\Application\Port\In\Package\ListPackagesResult;
 use App\Application\Port\Out\Persistence\PackageDetail;
 use App\Application\Port\Out\Persistence\PackageQueryRepository;
 use App\Domain\Package\Coordinates;
+use App\Domain\Package\DeliveryEstimate;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\Connection;
@@ -21,7 +22,7 @@ final readonly class MySqlPackageQueryRepository implements PackageQueryReposito
     }
 
     public function searchBySede(
-        int $sedeId,
+        ?int $sedeId,
         ?string $search,
         ?string $status,
         ?string $from,
@@ -31,8 +32,11 @@ final readonly class MySqlPackageQueryRepository implements PackageQueryReposito
     ): ListPackagesResult {
         $query = $this->connection->table('paquetes as p')
             ->join('estados_paquete as e', 'e.id', '=', 'p.estado_actual_id')
-            ->join('distritos as d', 'd.ubigeo', '=', 'p.ubigeo_destino')
-            ->where('p.id_sede', $sedeId);
+            ->join('distritos as d', 'd.ubigeo', '=', 'p.ubigeo_destino');
+        // null = todas las sedes (solo el administrador llega aquí sin sede).
+        if ($sedeId !== null) {
+            $query->where('p.id_sede', $sedeId);
+        }
 
         if ($search !== null) {
             $like = addcslashes($search, '\\%_');
@@ -62,6 +66,7 @@ final readonly class MySqlPackageQueryRepository implements PackageQueryReposito
             ->get([
                 'p.id',
                 'p.tracking_id',
+                'p.id_sede',
                 'p.destinatario_nombres',
                 'p.destinatario_dni',
                 'p.ubigeo_destino',
@@ -80,6 +85,8 @@ final readonly class MySqlPackageQueryRepository implements PackageQueryReposito
             $items[] = [
                 'id' => (int) $row->id,
                 'tracking_id' => $row->tracking_id,
+                // Necesario para el administrador, que puede ver paquetes de varias sedes en la misma lista.
+                'id_sede' => (int) $row->id_sede,
                 'destinatario' => [
                     'nombres' => $row->destinatario_nombres,
                     'dni' => $row->destinatario_dni,
@@ -215,6 +222,7 @@ final readonly class MySqlPackageQueryRepository implements PackageQueryReposito
                 ],
             ],
             'fecha_ingreso' => $this->formatDate($row->fecha_ingreso),
+            'fecha_estimada_entrega' => $this->estimatedDelivery($row->fecha_ingreso),
         ];
 
         return new PackageDetail(
@@ -280,6 +288,7 @@ final readonly class MySqlPackageQueryRepository implements PackageQueryReposito
         $row = $this->connection->table('paquetes as p')
             ->join('estados_paquete as e', 'e.id', '=', 'p.estado_actual_id')
             ->join('distritos as d', 'd.ubigeo', '=', 'p.ubigeo_destino')
+            ->leftJoin('lotes as l', 'l.id', '=', 'p.id_lote')
             ->where('p.tracking_id', $trackingId)
             ->first([
                 'p.id',
@@ -288,6 +297,7 @@ final readonly class MySqlPackageQueryRepository implements PackageQueryReposito
                 'e.nombre as estado_nombre',
                 'd.nombre_mostrado as distrito',
                 'p.fecha_ingreso',
+                'l.despachado_at',
             ]);
 
         if ($row === null) {
@@ -318,8 +328,16 @@ final readonly class MySqlPackageQueryRepository implements PackageQueryReposito
             'estado' => ['codigo' => $row->estado_codigo, 'nombre' => $row->estado_nombre],
             'destino' => ['distrito' => $row->distrito],
             'fecha_ingreso' => $this->formatDate($row->fecha_ingreso),
+            // Cuándo se asignó su lote a un conductor; null mientras sigue en almacén.
+            'fecha_despacho' => $row->despachado_at === null ? null : $this->formatDate($row->despachado_at),
+            'fecha_estimada_entrega' => $this->estimatedDelivery($row->fecha_ingreso),
             'linea_de_tiempo' => $timeline,
         ];
+    }
+
+    private function estimatedDelivery(string $registeredAt): string
+    {
+        return LimaTime::format(DeliveryEstimate::from(new DateTimeImmutable($registeredAt, new DateTimeZone('UTC'))));
     }
 
     /** Los filtros representan dias de Lima, pero la BD guarda UTC. */

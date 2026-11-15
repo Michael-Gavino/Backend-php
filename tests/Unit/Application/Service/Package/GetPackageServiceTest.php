@@ -11,6 +11,8 @@ use App\Application\Port\In\Auth\AuthenticatedUser;
 use App\Application\Port\In\Package\GetPackageQuery;
 use App\Application\Port\Out\Persistence\PackageDetail;
 use App\Application\Port\Out\Persistence\PackageQueryRepository;
+use App\Application\Port\Out\Persistence\PackageRetrySource;
+use App\Application\Port\Out\Persistence\PackageRetrySourceRepository;
 use App\Application\Service\Package\GetPackageService;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -54,6 +56,47 @@ final class GetPackageServiceTest extends TestCase
 
         self::assertSame('AB23456789', $result['tracking_id']);
         self::assertSame('15.50', $result['costo_estimado']);
+        self::assertSame('Remitente', $result['remitente']['nombres']);
+        self::assertSame(self::HISTORY, $result['historial']);
+    }
+
+    #[DataProvider('reintentos')]
+    public function test_el_operador_ve_cuantos_reintentos_quedan(PackageRetrySource $source, int $expected): void
+    {
+        $repository = $this->createStub(PackageQueryRepository::class);
+        $repository->method('findDetail')->willReturn($this->detail());
+        $sources = $this->createStub(PackageRetrySourceRepository::class);
+        $sources->method('findRetrySource')->willReturn($source);
+
+        $result = (new GetPackageService($repository, $sources))->execute(new GetPackageQuery($this->operator(), 10))->toArray();
+
+        self::assertSame($expected, $result['reintentos_restantes']);
+    }
+
+    public static function reintentos(): array
+    {
+        return [
+            'primer intento fallido' => [new PackageRetrySource(1, 'FALLIDO', false, 0, [], 'FALLIDO', 'CLIENTE_AUSENTE'), 3],
+            'segundo reintento fallido' => [new PackageRetrySource(1, 'FALLIDO', false, 2, [], 'FALLIDO', 'OTRO'), 1],
+            'rechazado' => [new PackageRetrySource(1, 'FALLIDO', false, 0, [], 'FALLIDO', 'RECHAZADO'), 0],
+            'ya reintentado' => [new PackageRetrySource(1, 'FALLIDO', true, 1, [], 'FALLIDO', 'CLIENTE_AUSENTE'), 0],
+        ];
+    }
+
+    public function test_el_conductor_no_recibe_reintentos_restantes(): void
+    {
+        $result = $this->service($this->detail())->execute(new GetPackageQuery($this->driver(), 10))->toArray();
+
+        self::assertArrayNotHasKey('reintentos_restantes', $result);
+    }
+
+    public function test_el_administrador_ve_el_detalle_completo_de_cualquier_sede(): void
+    {
+        $admin = new AuthenticatedUser(1, 'Admin', 'admin@example.invalid', 'ADMINISTRADOR');
+
+        $result = $this->service($this->detail(sedeId: 3))->execute(new GetPackageQuery($admin, 10))->toArray();
+
+        self::assertSame('AB23456789', $result['tracking_id']);
         self::assertSame('Remitente', $result['remitente']['nombres']);
         self::assertSame(self::HISTORY, $result['historial']);
     }
@@ -151,7 +194,6 @@ final class GetPackageServiceTest extends TestCase
     public static function usuariosSinPermiso(): array
     {
         return [
-            'administrador' => [new AuthenticatedUser(1, 'Admin', 'admin@example.invalid', 'ADMINISTRADOR')],
             'operador sin sede' => [new AuthenticatedUser(2, 'Ana', 'ana@example.invalid', 'OPERADOR', false, null)],
         ];
     }
